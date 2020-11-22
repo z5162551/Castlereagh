@@ -1,0 +1,165 @@
+//--------------------------Initial Parameters----------------------
+
+// Approx location
+	var point = ee.Geometry.Point(150.75930459936296,-33.67060750183992);
+	
+// Approx Sentinel2 Scene (backup).
+	var region = ee.Geometry.Polygon(
+		[[[150.74818093713188,-33.67658292352977],
+			[150.7677074187603,-33.67658292352977],
+			[150.7677074187603,-33.664903872818044],
+			[150.74818093713188,-33.664903872818044],
+			[150.74818093713188,-33.67658292352977]]],
+	  null, false
+	);
+
+// Pan to map
+	Map.setCenter(150.75930459936296,-33.67060750183992, 15);
+	
+
+//--------------------------Cloud Masking---------------------------------
+
+// Function to mask clouds using the Sentinel-2 QA band.
+function maskS2clouds(image) {
+  var qa = image.select('QA60');
+
+  // Bits 10 and 11 are clouds and cirrus, respectively.
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0).and(
+             qa.bitwiseAnd(cirrusBitMask).eq(0));
+
+  // Return the masked and scaled data, without the QA bands.
+  return image.updateMask(mask).divide(10000)
+      .select("B.*")
+      .copyProperties(image, ["system:time_start"]);
+}
+
+//----------------------------Collection Load-----------------------------
+
+// Using Sentinel-2. Switch between TOA/BOA using 'COPERNICUS/S2' & 'COPERNICUS/S2_SR'
+// 'COPERNICUS/S2' -> More historical data available (L1C TOA)
+// 'COPERNICUS/S2_SR'-> Corrected (L2A BOA)
+	var colSite = ee.ImageCollection('COPERNICUS/S2_SR')
+	
+      // Filter by location; [REMOVE FOR MOSAIC]
+      .filterBounds(point)
+      
+      // Pre-filter to get less cloudy granules.
+      .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))
+      .map(maskS2clouds)
+      .filterDate('2018-9-1', '2020-9-30');
+
+
+//---------------------------------Spectral indices-----------------------------------
+
+// Function to compute EVI
+function tasks(image) {
+  
+  // Bands
+  var nir = image.select('B8');
+  var red = image.select('B4');
+  var blue = image.select('B2');
+  
+  //EVI
+	var denom = nir.add(red.multiply(6)).subtract(blue.multiply(7.5)).add(1);
+	var EVI = ((nir.subtract(red)).divide(denom)).multiply(1).rename('EVI');
+
+ //NBR - Edit as required
+//  var NBR = image.normalizedDifference(['B8', 'B12']).rename('NBR');
+
+//NDVI (B4), NDVIre1 (B5), NDVIre2 (B6), NDVIre3 (B7) - Edit as required
+//  var NDVI = image.normalizedDifference(['B8', 'B4']).rename('NDVI'); 
+	
+	// Add MOY
+  var moy = ee.Date(image.get('system:time_start')).getRange('month');
+  
+  
+  return EVI
+      .resample('bicubic')
+      .copyProperties(image, ["system:time_start"])
+      .set('moy', moy)
+      ;
+}
+
+
+
+//-----------------------Image Collections-------------------------
+
+// Apply previous fucntion to image collection
+  var adjusted = colSite.map(tasks);
+  
+// Filter collection by date
+  var colImg = adjusted.filterDate('2019-9-1', '2020-9-30');
+  
+
+// Define a filter that identifies which images from the complete
+// collection match the mOY from the distinct mOY collection.
+	var filter = ee.Filter.equals({leftField: 'moy', rightField: 'moy'});
+
+
+//-----------------------Stitching images--------------------------
+
+// Define a join.
+	var join = ee.Join.saveAll('moy_matches');
+
+// Apply the join and convert the resulting FeatureCollection to an
+// ImageCollection.
+	var joinCol = ee.ImageCollection(join.apply(colImg, adjusted, filter));
+	
+		print(joinCol);
+
+// Apply median reduction among matching DOY collections.
+	var comp = joinCol.map(function(img) {
+    var moyCol = ee.ImageCollection.fromImages(
+      img.get('moy_matches')
+      
+    );
+  // Add dOY
+  var doy = ee.Date(img.get('system:time_start'));//.getRelative('day', 'year');
+    return moyCol.reduce(ee.Reducer.median()).set('day', doy);
+	});
+	
+	print(comp);
+
+
+//---------------------Visualisation Parameters----------------------
+
+// Visualisation Parameters
+	var visParams = {
+    min: -0.175,
+    max: 1,
+    palette: [
+      'FFFFFF', 'CE7E45', 'DF923D', 'F1B555', 'FCD163', '99B718', '74A901',
+      '66A000', '529400', '3E8601', '207401', '056201', '004C00', '023B01',
+      '012E01', '011D01', '011301'
+    ],
+	};
+
+// Splitting NDVIre1 into 3 arbitrary RGB values for visualisation.
+	var rgbVis = comp.map(function(img) {
+    return img.visualize(visParams)
+	});
+
+// GIF parameters.
+	var gifParams = {
+    'region': region,
+    'dimensions': 600,
+    'crs': 'EPSG:3857',
+
+		//Change for animation speed
+    'framesPerSecond': 2,
+    'format': 'gif'
+
+	};
+	
+	
+//-------------------------Product-------------------------------
+
+// Print the GIF URL to the console.
+	print(rgbVis.getVideoThumbURL(gifParams));
+
+// Render the GIF animation in the console.
+	print(ui.Thumbnail(rgbVis, gifParams));
