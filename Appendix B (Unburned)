@@ -1,0 +1,224 @@
+//--------------------------Initial Parameters----------------------
+
+// Approx location
+	var point = ee.Geometry.Point(150.70920681538752,-33.66387679567037);
+
+var site = ee.FeatureCollection([
+  ee.Feature(ee.Geometry.Polygon([[150.75623238676525,-33.67072917555628],
+																	[150.76080287092663,-33.67175599745286],
+																	[150.7616075336311,-33.67182742808526],
+																	[150.76188648336864,-33.67144348773864],
+																	[150.76181138151622,-33.67058631240788],
+																	[150.7599126921431,-33.668578002156195],
+																	[150.7586681471602,-33.66832798523778],
+																	[150.75623238676525,-33.67072917555628]]
+																	))]);
+
+// Pan to map
+	Map.setCenter(150.75930459936296,-33.67060750183992, 15);
+
+// Define and display a FeatureCollection of three known locations.
+
+//UB1
+var B1 = ee.FeatureCollection([
+  geometry3]);
+//UB2
+var B2 = ee.FeatureCollection([
+  geometry2]);
+var B3 = ee.FeatureCollection([
+//UB3
+  geometry]);
+
+// Visualisation Parameters (Biomass)
+	var visParams = {
+    min: -14.238,
+    max: 35.432,
+    palette: [
+      'FFFFFF', 'CE7E45', 'DF923D', 'F1B555', 'FCD163', '99B718', '74A901',
+      '66A000', '529400', '3E8601', '207401', '056201', '004C00', '023B01',
+      '012E01', '011D01', '011301'
+    ],
+	};
+	
+// Visualisation Parameters (EVI)
+	var visParams2 = {
+    min: -0.175,
+    max: 0.7,
+    palette: [
+      'FFFFFF', 'CE7E45', 'DF923D', 'F1B555', 'FCD163', '99B718', '74A901',
+      '66A000', '529400', '3E8601', '207401', '056201', '004C00', '023B01',
+      '012E01', '011D01', '011301'
+    ],
+	};
+
+
+//--------------------------Cloud Masking---------------------------------
+ 
+// Function to mask clouds using the Sentinel-2 QA band.
+function maskS2clouds(image) {
+  var qa = image.select('QA60')
+
+  // Bits 10 and 11 are clouds and cirrus, respectively.
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0).and(
+             qa.bitwiseAnd(cirrusBitMask).eq(0))
+
+  // Return the masked and scaled data, without the QA bands.
+  return image.updateMask(mask).divide(10000)
+      .select("B.*")
+      .copyProperties(image, ["system:time_start"])
+}
+
+//----------------------EVI, Median Reflectance---------------------
+
+// Load Sentinel-2 TOA reflectance data.
+  var collection = ee.ImageCollection('COPERNICUS/S2_SR')
+    
+    // Filter by location; remove for mosaic
+    .filterBounds(point)
+    .filterDate('2019-09-20', '2019-09-30')
+    
+    // Pre-filter to get less cloudy granules.
+    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 5))
+    .map(maskS2clouds)
+
+  var composite = collection.median()
+  
+// Function to compute EVI
+
+  // Bands
+  var nir = composite.select('B8');
+  var red = composite.select('B4');
+  var blue = composite.select('B2');
+  
+  //EVI
+	var denom = nir.add(red.multiply(6)).subtract(blue.multiply(7.5)).add(1);
+	var EVI = ((nir.subtract(red)).divide(nir.add(denom))).multiply(1).rename('EVI');
+  
+//  return image.addBands(EVI);
+  Map.addLayer(EVI, visParams2, 'EVI');
+
+//Biomass - CHANGE to ndvi for NDVI
+  var Bio = (EVI.multiply(175.43)).subtract(4.8895).rename('Bio');
+  Map.addLayer(Bio, visParams, 'Biomass');
+
+//----------------------RBG Comparison---------------------
+
+Map.addLayer(composite, {bands: ['B4', 'B3', 'B2'], min: 0, max: 0.3}, 'RGB')
+
+
+//--------------------------EVI VALUES---------------------------------
+
+//B1
+// Reduce the region. The region parameter is the Feature geometry.
+var meanDictionaryB1 = EVI.reduceRegion({
+  reducer: ee.Reducer.mean(),
+  geometry: B1.geometry(),
+  scale: 1,
+  maxPixels: 1e9
+});
+
+// The result is a Dictionary.  Print it.
+print(meanDictionaryB1);
+
+
+//B2
+// Reduce the region. The region parameter is the Feature geometry.
+var meanDictionaryB2 = EVI.reduceRegion({
+  reducer: ee.Reducer.mean(),
+  geometry: B2.geometry(),
+  scale: 1,
+  maxPixels: 1e9
+});
+
+// The result is a Dictionary.  Print it.
+print(meanDictionaryB2);
+
+
+//B3
+// Reduce the region. The region parameter is the Feature geometry.
+var meanDictionaryB3 = EVI.reduceRegion({
+  reducer: ee.Reducer.mean(),
+  geometry: B3.geometry(),
+  scale: 1,
+  maxPixels: 1e9
+});
+
+// The result is a Dictionary.  Print it.
+print(meanDictionaryB3);
+
+
+//--------------------------Bio VALUES---------------------------------
+
+//Biomass for site (average)
+// Reduce the region. The region parameter is the Feature geometry.
+var meanDictionaryBio = Bio.reduceRegion({
+  reducer: ee.Reducer.mean(),
+  geometry: site.geometry(),
+  scale: 1,
+  maxPixels: 1e9
+});
+
+print(meanDictionaryBio);
+
+// set position of panel
+var legend = ui.Panel({
+  style: {
+    position: 'bottom-left',
+    padding: '8px 15px'
+  }
+});
+
+//--------------------------Legend---------------------------------
+ 
+// Create legend title
+var legendTitle = ui.Label({
+  value: 'Biomass (g/m^2)',
+  style: {
+    fontWeight: 'bold',
+    fontSize: '18px',
+    margin: '0 0 4px 0',
+    padding: '0'
+    }
+});
+
+ // Add the title to the panel
+legend.add(legendTitle); 
+
+// create the legend image
+var lon = ee.Image.pixelLonLat().select('latitude');
+var gradient = lon.multiply((visParams.max-visParams.min)/100.0).add(visParams.min);
+var legendImage = gradient.visualize(visParams);
+
+// create text on top of legend
+var panel = ui.Panel({
+    widgets: [
+      ui.Label(visParams['max'])
+    ],
+  });
+
+legend.add(panel);
+  
+// create thumbnail from the image
+var thumbnail = ui.Thumbnail({
+  image: legendImage, 
+  params: {bbox:'0,0,10,100', dimensions:'10x200'},  
+  style: {padding: '1px', position: 'bottom-center'}
+});
+
+// add the thumbnail to the legend
+legend.add(thumbnail);
+
+// create text on top of legend
+var panel = ui.Panel({
+    widgets: [
+      ui.Label(visParams['min'])
+    ],
+  });
+
+legend.add(panel);
+
+Map.add(legend);
