@@ -1,0 +1,209 @@
+//--------------------------Initial Parameters----------------------
+
+// Approx location
+var point = ee.Geometry.Point(150.75930459936296, -33.67060750183992);
+
+// Approx Sentinel2 Scene (backup).
+var region = ee.Geometry.Polygon(
+    [
+        [
+            [150.74818093713188, -33.67658292352977],
+            [150.7677074187603, -33.67658292352977],
+            [150.7677074187603, -33.664903872818044],
+            [150.74818093713188, -33.664903872818044],
+            [150.74818093713188, -33.67658292352977]
+        ]
+    ],
+    null, false
+);
+
+
+// Pan to map
+Map.setCenter(150.75930459936296, -33.67060750183992, 15);
+
+
+// Coordinates for B1/UB1 ----------------------------------------
+var points2 = ee.FeatureCollection([
+
+    //B1
+    ee.Feature(ee.Geometry.Polygon([
+        [150.7574129, -33.67101481],
+        [150.7576705, -33.67106357],
+        [150.7577942, -33.6708144],
+        [150.757463, -33.67073423],
+        [150.7574129, -33.67101481]
+    ])),
+    //UB1
+    ee.Feature(ee.Geometry.Polygon([
+        [150.7572361, -33.67141919],
+        [150.7569904, -33.67129165],
+        [150.7568322, -33.67149713],
+        [150.7570689, -33.67164327],
+        [150.7572361, -33.67141919]
+    ]))
+]);
+
+// Coordinates for B2/UB2 ----------------------------------------
+//B2
+// ee.Feature(ee.Geometry.Polygon([[150.7586834, -33.67123675],
+// [150.7587497, -33.67098295],
+// [150.7590904, -33.67099302],
+// [150.758995, -33.67133949],
+// [150.7586834, -33.67123675]]
+// )),
+//UB2
+// ee.Feature(ee.Geometry.Polygon([[150.7581892, -33.67185861],
+// [150.7581824, -33.67165263],
+// [150.7584735,-33.67166442],
+// [150.7585121, -33.67189392],
+// [150.7581892, -33.67185861]]
+// ))]);
+
+// Coordinates for B3/UB3 ----------------------------------------
+//B3
+// ee.Feature(ee.Geometry.Polygon([[150.7597258, -33.67147323],
+// [150.7597484, -33.67113956],
+// [150.7601244, -33.67113237],
+// [150.7600367, -33.6715582],
+// [150.7597258, -33.67147323]]
+// )),
+//UB3
+// ee.Feature(ee.Geometry.Polygon([[150.7594303, -33.67205629],
+// [150.7591991, -33.67234464],
+// [150.7590217, -33.67221465],
+// [150.7591808, -33.67194101],
+// [150.7594303, -33.67205629]]
+// ))]);
+
+Map.addLayer(points2);
+
+
+// Customisation options for graph
+
+var options = {
+    //Change spectral index and plot number if necessary
+    title: 'EVI Time Series Analysis - 2019/2020 Fire: Plot 1 (L2A)',
+    //hAxis: {title: 'MM/YYYY'},
+    vAxis: {
+        title: 'EVI Value'
+    },
+    //trendlines: {type: 'linear', 1: {color: 'CC0000', labelInLegend: 'UB1 Trendline'}, visibleInLegend: true},
+    lineWidth: 2,
+    pointSize: 0,
+    series: {
+        0: {
+            color: '00FF00',
+            labelInLegend: 'B1'
+        }, // B1
+        1: {
+            color: '0000FF',
+            labelInLegend: 'UB1'
+        }, // UB1
+    }
+};
+
+//--------------------------Cloud Masking---------------------------------
+
+// Function to mask clouds using the Sentinel-2 QA band.
+function maskS2clouds(image) {
+    var qa = image.select('QA60');
+
+    // Bits 10 and 11 are clouds and cirrus, respectively.
+    var cloudBitMask = 1 << 10;
+    var cirrusBitMask = 1 << 11; // Both flags should be set to zero, indicating clear conditions. var mask=qa.bitwiseAnd(cloudBitMask).eq(0).and( qa.bitwiseAnd(cirrusBitMask).eq(0)); // Return the masked and scaled data, without the QA bands. return image.updateMask(mask).divide(10000) .select("B.*") .copyProperties(image, ["system:time_start"]); } //----------------------------Collection Load----------------------------- // Using Sentinel-2. Switch between TOA/BOA using 'COPERNICUS/S2' & 'COPERNICUS/S2_SR' // 'COPERNICUS/S2' -> More historical data available (L1C TOA)
+    // 'COPERNICUS/S2_SR'-> Corrected (L2A BOA)
+    var colSite = ee.ImageCollection('COPERNICUS/S2_SR')
+
+        // Filter by location; [REMOVE FOR MOSAIC]
+        .filterBounds(point)
+
+        // Pre-filter to get less cloudy granules.
+        .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))
+        .map(maskS2clouds)
+        .filterDate('2018-9-1', '2020-9-30');
+
+
+    //---------------------------------Spectral indices-----------------------------------
+
+    // Function to compute EVI
+    function tasks(image) {
+
+        // Bands
+        var nir = image.select('B8');
+        var red = image.select('B4');
+        var blue = image.select('B2');
+
+        //EVI
+        var denom = nir.add(red.multiply(6)).subtract(blue.multiply(7.5)).add(1);
+        var EVI = ((nir.subtract(red)).divide(denom)).multiply(1).rename('EVI');
+
+        //NBR - Edit as required
+        // var NBR = image.normalizedDifference(['B8', 'B12']).rename('NBR');
+
+        //NDVI (B4), NDVIre1 (B5), NDVIre2 (B6), NDVIre3 (B7) - Edit as required
+        // var NDVI = image.normalizedDifference(['B8', 'B4']).rename('NDVI');
+
+        // Add MOY
+        var moy = ee.Date(image.get('system:time_start')).getRange('month');
+
+
+        return EVI
+            .resample('bicubic')
+            .copyProperties(image, ["system:time_start"])
+            .set('moy', moy);
+    }
+
+
+
+    //-----------------------Image Collections-------------------------
+
+    // Apply previous fucntion to image collection
+    var adjusted = colSite.map(tasks);
+
+    // Filter collection by date
+    var colImg = adjusted.filterDate('2019-9-1', '2020-9-30');
+
+
+    // Define a filter that identifies which images from the complete
+    // collection match the mOY from the distinct mOY collection.
+    var filter = ee.Filter.equals({
+        leftField: 'moy',
+        rightField: 'moy'
+    });
+
+
+    //-----------------------Stitching images--------------------------
+
+    // Define a join.
+    var join = ee.Join.saveAll('moy_matches');
+
+    // Apply the join and convert the resulting FeatureCollection to an
+    // ImageCollection.
+    var joinCol = ee.ImageCollection(join.apply(colImg, adjusted, filter));
+
+    print(joinCol);
+
+    // Apply median reduction among matching DOY collections.
+    var comp = joinCol.map(function(img) {
+        var moyCol = ee.ImageCollection.fromImages(
+            img.get('moy_matches')
+
+        );
+        // Add dOY
+        var doy = ee.Date(img.get('system:time_start')); //.getRelative('day', 'year');
+        return moyCol.reduce(ee.Reducer.median()).set('day', doy);
+    });
+
+    print(comp);
+
+    //-----------------------------------------------------------------
+    // Create a chart.
+    // Create the chart and set options.
+    var spectraChart = ui.Chart.image.seriesByRegion(
+            //Change band if necessary to ..._median
+            comp, points2, ee.Reducer.mean(), 'EVI_median', 10, 'day')
+        .setChartType('ScatterChart')
+        .setOptions(options);
+
+    // Display the chart.
+    print(spectraChart);
