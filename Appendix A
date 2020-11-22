@@ -145,7 +145,7 @@ function tasks(image) {
 	// Add MOY
   var moy = ee.Date(image.get('system:time_start')).getRange('month');
   
-  
+
   return EVI
       .resample('bicubic')
       .copyProperties(image, ["system:time_start"])
